@@ -36,18 +36,19 @@
   <script>
     const API_URL = "https://binance-flask-app-production.up.railway.app/top_marketcap_enriched";
 
+    // 레이아웃(15M 페이지와 동일 간격)
     const rowHeight = 50;
     const barHeight = 26;
     const labelY    = barHeight / 2;
-    const barStartX = 250;
+    const barStartX = 200;     // ← 250 → 200 으로 줄여 막대와 라벨 간격 좁힘
 
-    // 메인(시총) 막대 최대 길이, 거래대금(1H) 보조 막대 최대 길이
+    // 시총 막대 / 1시간 거래대금 보조막대 최대 길이
     const mcBarMaxW   = 650;
     const turnBarMaxW = 550;
 
     const svg = d3.select("#chart");
     let secondsToNextUpdate = 300; // 5분 주기
-    let previousDataMap = new Map();
+    let previousDataMap = new Map(); // { key: { rank, market_cap_usd } }
 
     function formatCompact(n) {
       if (n == null || isNaN(n)) return "N/A";
@@ -97,7 +98,7 @@
       const data = await fetchData();
       if (!data || data.length === 0) return;
 
-      // 시총 내림차순 보장
+      // 서버가 시총 내림차순으로 주지만 안전하게 다시 정렬
       data.sort((a, b) => (b.market_cap_usd || 0) - (a.market_cap_usd || 0));
 
       const maxMC   = d3.max(data, d => Math.max(0, d.market_cap_usd || 0));
@@ -105,7 +106,7 @@
 
       svg.attr("height", data.length * rowHeight + 60);
 
-      // 🔑 key를 선물 심볼로 고정 (fallback: SYMBOL+USDT)
+      // 키: 선물 심볼(없으면 SYMBOL+USDT fallback)
       const keyFn = d => d.futures_symbol || (d.symbol ? d.symbol + "USDT" : d.symbol);
       const group = svg.selectAll("g.row").data(data, keyFn);
 
@@ -113,6 +114,17 @@
         .append("g")
         .attr("class", "row")
         .attr("transform", (d, i) => `translate(50, ${i * rowHeight})`);
+
+      // 등락/NEW 표시 (15M 페이지 스타일)
+      enter.append("text")
+        .attr("class", "rank-change")
+        .attr("x", 0)
+        .attr("y", labelY)
+        .attr("dy", ".35em")
+        .attr("text-anchor", "start")
+        .style("font-size", "14px")
+        .style("opacity", 0)
+        .attr("fill", "white");
 
       // 라벨: 선물 심볼만
       enter.append("text")
@@ -130,7 +142,7 @@
           if (fsym) window.open(`https://www.binance.com/en/futures/${fsym}`, "_blank");
         });
 
-      // 메인 막대(시총)
+      // 시총 메인 막대
       enter.append("rect")
         .attr("class", "bar-mc")
         .attr("x", barStartX)
@@ -158,7 +170,7 @@
         .attr("fill", "#ffffff")
         .attr("opacity", 1);
 
-      // 거래대금 라벨
+      // 거래대금 값 라벨
       enter.append("text")
         .attr("class", "value-turn")
         .attr("x", barStartX + 10)
@@ -170,28 +182,44 @@
 
       const merged = enter.merge(group);
 
-      // 위치 갱신
+      // 행 위치 갱신
       merged.transition().duration(800)
         .attr("transform", (d, i) => `translate(50, ${i * rowHeight})`);
 
       // 요소 갱신
-      merged.each(function(d) {
+      merged.each(function(d, i) {
         const g = d3.select(this);
+        const fsym = keyFn(d);
 
-        const fsym = keyFn(d); // 라벨에 쓸 선물 심볼
         const mc   = Math.max(0, d.market_cap_usd || 0);
         const mcW  = maxMC > 0 ? (mc / maxMC) * mcBarMaxW : 0;
 
         const turn  = Math.max(0, d.volume_usdt_1h || 0);
         const turnW = maxTurn > 0 ? (turn / maxTurn) * turnBarMaxW : 0;
 
-        // 라벨: 선물 심볼만
+        // 등락/NEW
+        const prev = previousDataMap.get(fsym);
+        const rankText = g.select("text.rank-change");
+        if (!prev) {
+          rankText.text("NEW").attr("fill", "white");
+        } else {
+          const diff = prev.rank - i;
+          if (diff === 0) {
+            rankText.text("=").attr("fill", "#cccccc");
+          } else {
+            const arrow = diff > 0 ? "▲" : "▼";
+            const color = diff > 0 ? "#00ff88" : "#ff3366";
+            rankText.text(`${arrow}${Math.abs(diff)}`).attr("fill", color);
+          }
+        }
+        rankText.transition().duration(800).style("opacity", 1);
+
+        // 라벨(선물 심볼)
         g.select("text.label")
           .text(fsym || "")
-          .transition().duration(800)
-          .style("opacity", 1);
+          .transition().duration(800).style("opacity", 1);
 
-        // 메인(시총) 막대
+        // 시총 막대
         g.select("rect.bar-mc")
           .transition().duration(1000)
           .attr("width", mcW)
@@ -202,7 +230,6 @@
           .transition().duration(1000)
           .style("opacity", 1)
           .tween("text", function() {
-            const prev = previousDataMap.get(fsym);
             const start = prev ? (prev.market_cap_usd || 0) : 0;
             const interp = d3.interpolateNumber(start, mc);
             return function(t) { this.textContent = `$${formatCompact(interp(t))}`; };
@@ -215,7 +242,7 @@
           .transition().duration(1000)
           .attr("width", turnW);
 
-        // 거래대금 라벨
+        // 거래대금 값
         g.select("text.value-turn")
           .text(`${formatCompact(turn)} USDT`)
           .transition().duration(800)
@@ -227,11 +254,11 @@
       // 퇴장
       group.exit().remove();
 
-      // 이전 값 기록(시총만 보관)
+      // 이전 값 기록(랭크 & 시총 보관)
       previousDataMap.clear();
-      data.forEach(d => {
-        const fsym = keyFn(d);
-        previousDataMap.set(fsym, { market_cap_usd: d.market_cap_usd });
+      data.forEach((d, i) => {
+        const key = keyFn(d);
+        previousDataMap.set(key, { rank: i, market_cap_usd: d.market_cap_usd });
       });
     }
 
