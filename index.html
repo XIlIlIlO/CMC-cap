@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Top Market Cap × 1H Turnover</title>
+  <title>Top 30 Market Cap + 1H Turnover</title>
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <style>
     html, body {
@@ -12,57 +12,52 @@
       color: white;
       font-family: sans-serif;
       overflow: hidden;
-      width: 100vw;
-      height: 100vh;
+      width: 100vw; height: 100vh;
     }
     body {
       transform: scale(0.68);
       transform-origin: top left;
-      width: 133.33%;
-      height: 133.33%;
+      width: 133.33%; height: 133.33%;
       padding: 40px;
     }
-    h1 { font-size: 26px; font-weight: bold; margin: 0 0 8px 0; }
-    #time { margin-bottom: 16px; font-size: 16px; color: #cccccc; }
-    #countdown { margin-left: 16px; color: #888; }
-    .hint { color:#888; font-size: 14px; margin-bottom: 8px; }
+    #time { margin-bottom: 20px; font-size: 16px; color: #ccc; }
+    #countdown { margin-left: 12px; color: #888; }
   </style>
 </head>
 <body>
-  <h1>■ 시가총액 TOP × 1시간 거래대금 (5분마다 갱신) ■</h1>
-  <div class="hint">메인 막대: 시가총액 / 보조 막대: <b>1시간치 거래대금</b> / 색상: 1시간 시가↔종가 (↑ green / ↓ red)</div>
-
+  <h1 style="font-size:26px;font-weight:bold;">
+    ■ SUPERHERO 시가총액 TOP30 + 1시간 거래대금 ■
+  </h1>
   <div id="time">
-    UTC 시간 로딩 중... <span id="countdown">다음 갱신까지 300s</span>
+    UTC 시간 로딩 중... 
+    <span style="color:#aaa;">(1시간 거래대금, 5분마다 갱신)</span>
+    <span id="countdown">다음 갱신까지 300s</span>
   </div>
-
-  <svg id="chart" width="1200" height="1500"></svg>
+  <svg id="chart" width="1100" height="1600"></svg>
 
   <script>
     const API_URL = "https://binance-flask-app-production.up.railway.app/top_marketcap_enriched";
 
-    // 레이아웃
-    const rowHeight   = 50;       // 한 행 전체 높이
-    const capBarH     = 26;       // 시총 메인 막대 높이
-    const capBarStart = 240;      // 메인 막대 시작 X
-    const capBarMaxW  = 600;      // 메인 막대 최대 길이
+    const rowHeight = 50;
+    const barHeight = 26;
+    const volBarY   = 0;
+    const labelY    = barHeight / 2;
+    const barStartX = 250;
 
-    const volBarH     = 8;        // 거래대금 보조 막대 높이
-    const volBarY     = capBarH + 6;
-    const volBarMaxW  = 550;      // 거래대금 보조 막대 최대 길이
+    // 메인(시총) 막대 최대 길이, 거래대금(1H) 보조 막대 최대 길이
+    const mcBarMaxW   = 650;
+    const turnBarMaxW = 550;
 
     const svg = d3.select("#chart");
-
     let previousDataMap = new Map();
     let secondsToNextUpdate = 300; // 5분
 
-    function numCompact(n) {
-      if (n == null || isNaN(n)) return "—";
-      const abs = Math.abs(n);
-      if (abs >= 1e12) return (n / 1e12).toFixed(2) + "T";
-      if (abs >= 1e9 ) return (n / 1e9 ).toFixed(2) + "B";
-      if (abs >= 1e6 ) return (n / 1e6 ).toFixed(2) + "M";
-      if (abs >= 1e3 ) return (n / 1e3 ).toFixed(2) + "K";
+    function formatCompact(n) {
+      if (n == null || isNaN(n)) return "N/A";
+      if (n >= 1e12) return (n/1e12).toFixed(2) + "T";
+      if (n >= 1e9)  return (n/1e9 ).toFixed(2) + "B";
+      if (n >= 1e6)  return (n/1e6 ).toFixed(2) + "M";
+      if (n >= 1e3)  return (n/1e3 ).toFixed(2) + "K";
       return n.toFixed(0);
     }
 
@@ -73,7 +68,7 @@
       const d = String(now.getUTCDate()).padStart(2, '0');
       const h = String(now.getUTCHours()).padStart(2, '0');
       const mm = String(now.getUTCMinutes()).padStart(2, '0');
-      document.getElementById("time").childNodes[0].textContent = `${y}-${m}-${d} ${h}:${mm} UTC`;
+      document.getElementById("time").childNodes[0].textContent = `${y}-${m}-${d} ${h}:${mm} UTC `;
     }
 
     function startCountdown() {
@@ -85,151 +80,182 @@
     }
 
     async function fetchData() {
-      const res = await fetch(API_URL, { cache: "no-store" });
-      const j = await res.json();
-      return j.data || [];
+      const res = await fetch(API_URL);
+      const payload = await res.json();
+      // payload.data : [{rank,name,symbol,market_cap_usd,futures_symbol,volume_usdt_1h,color_1h}, ...]
+      return (payload && payload.data) ? payload.data : [];
     }
 
-    function colorOf(d) {
-      // 서버가 color_1h(green/red)를 넣어준다. 예외 시 안전색상 지정.
-      if (d.color_1h === "green") return "#00ff88";
-      if (d.color_1h === "red")   return "#ff3366";
-      // fallback: 종가-시가 비교
-      if (d.close_1h != null && d.open_1h != null) {
-        return d.close_1h >= d.open_1h ? "#00ff88" : "#ff3366";
-      }
-      return "#00ff88";
+    function barColor(color1h) {
+      if (color1h === "green") return "#00ff88";
+      if (color1h === "red")   return "#ff3366";
+      return "#777777"; // 바이낸스 선물 미존재 등
     }
 
     async function updateChart() {
       updateTimeLabel();
       secondsToNextUpdate = 300;
 
-      let data = await fetchData();
+      const data = await fetchData();
       if (!data || data.length === 0) return;
 
-      // 시총 내림차순 정렬 보장
+      // 시총 내림차순은 서버가 보장, 그래도 혹시 모를 상황 대비
       data.sort((a, b) => (b.market_cap_usd || 0) - (a.market_cap_usd || 0));
 
-      const maxCap = d3.max(data, d => Math.max(0, d.market_cap_usd || 0));
-      const maxTurnover = d3.max(data, d => Math.max(0, d.volume_usdt_1h || 0));
+      const maxMC     = d3.max(data, d => Math.max(0, d.market_cap_usd || 0));
+      const maxTurn   = d3.max(data, d => Math.max(0, d.volume_usdt_1h || 0));
 
       svg.attr("height", data.length * rowHeight + 60);
 
-      const rows = svg.selectAll("g.row")
-        .data(data, d => d.futures_symbol || d.symbol);
-
-      const enter = rows.enter()
+      const group = svg.selectAll("g.row").data(data, d => d.symbol);
+      const enter = group.enter()
         .append("g")
         .attr("class", "row")
-        .attr("transform", (d, i) => `translate(40, ${i * rowHeight})`);
+        .attr("transform", (d, i) => `translate(50, ${i * rowHeight})`);
 
-      // 순위
+      // 순위/NEW/등락(시총은 고정이라 간단히 NEW만)
       enter.append("text")
-        .attr("class", "rank")
+        .attr("class", "rank-change")
         .attr("x", 0)
-        .attr("y", capBarH / 2)
+        .attr("y", labelY)
         .attr("dy", ".35em")
-        .attr("fill", "#ccc")
-        .style("font-size", "14px");
+        .attr("text-anchor", "start")
+        .style("font-size", "14px")
+        .style("opacity", 0)
+        .attr("fill", "white");
 
-      // 심볼/이름
+      // 라벨: rank + name (SYMBOL)
       enter.append("text")
         .attr("class", "label")
-        .attr("x", 40)
-        .attr("y", capBarH / 2)
+        .attr("x", 50)
+        .attr("y", labelY)
         .attr("dy", ".35em")
+        .attr("text-anchor", "start")
         .attr("fill", "white")
-        .style("font-weight", "bold");
+        .style("font-weight", "bold")
+        .style("cursor", "pointer")
+        .style("opacity", 0)
+        .on("click", function (evt, d) {
+          // 바이낸스 선물 페이지로 이동 시도
+          if (d.futures_symbol) {
+            window.open(`https://www.binance.com/en/futures/${d.futures_symbol}`, "_blank");
+          }
+        });
 
-      // 시총 메인 막대
+      // 메인 막대(시총)
       enter.append("rect")
-        .attr("class", "bar-cap")
-        .attr("x", capBarStart)
-        .attr("y", 0)
-        .attr("height", capBarH)
+        .attr("class", "bar-mc")
+        .attr("x", barStartX)
+        .attr("y", volBarY)
+        .attr("height", barHeight)
         .attr("width", 0)
-        .attr("fill", "#00ff88");
+        .attr("fill", "#777");
 
       // 시총 값 라벨
       enter.append("text")
-        .attr("class", "value-cap")
-        .attr("x", capBarStart + 10)
-        .attr("y", capBarH / 2)
+        .attr("class", "value-mc")
+        .attr("x", barStartX + 10)
+        .attr("y", labelY)
         .attr("dy", ".35em")
-        .attr("fill", "white");
+        .attr("fill", "white")
+        .style("opacity", 0);
 
-      // 거래대금 보조 막대 (흰색)
+      // 거래대금 보조 막대(1H, 흰색)
       enter.append("rect")
-        .attr("class", "bar-vol")
-        .attr("x", capBarStart)
-        .attr("y", volBarY)
-        .attr("height", volBarH)
+        .attr("class", "bar-turn")
+        .attr("x", barStartX)
+        .attr("y", barHeight + 6)
+        .attr("height", 8)
         .attr("width", 0)
         .attr("fill", "#ffffff")
         .attr("opacity", 1);
 
       // 거래대금 라벨
       enter.append("text")
-        .attr("class", "value-vol")
-        .attr("x", capBarStart + 10)
-        .attr("y", volBarY + volBarH / 2)
+        .attr("class", "value-turn")
+        .attr("x", barStartX + 10)
+        .attr("y", barHeight + 6 + 4) // 8px/2 = 4
         .attr("dy", ".35em")
         .attr("fill", "#cccccc")
-        .style("font-size", "12px");
+        .style("font-size", "12px")
+        .style("opacity", 0);
 
-      const merged = enter.merge(rows);
+      const merged = enter.merge(group);
 
       // 위치 갱신
       merged.transition().duration(800)
-        .attr("transform", (d, i) => `translate(40, ${i * rowHeight})`);
+        .attr("transform", (d, i) => `translate(50, ${i * rowHeight})`);
 
-      // 각 요소 업데이트
+      // 요소 갱신
       merged.each(function(d, i) {
         const g = d3.select(this);
 
-        const capVal = Math.max(0, d.market_cap_usd || 0);
-        const capW = maxCap > 0 ? (capVal / maxCap) * capBarMaxW : 0;
+        // 길이 계산
+        const mc = Math.max(0, d.market_cap_usd || 0);
+        const mcW = maxMC > 0 ? (mc / maxMC) * mcBarMaxW : 0;
 
-        const volVal = Math.max(0, d.volume_usdt_1h || 0);
-        const volW = maxTurnover > 0 ? (volVal / maxTurnover) * volBarMaxW : 0;
+        const turn = Math.max(0, d.volume_usdt_1h || 0);
+        const turnW = maxTurn > 0 ? (turn / maxTurn) * turnBarMaxW : 0;
 
-        g.select("text.rank").text(String(d.rank).padStart(2, " "));
+        // 메인(시총) 막대
+        g.select("rect.bar-mc")
+          .transition().duration(1000)
+          .attr("width", mcW)
+          .attr("fill", barColor(d.color_1h));
 
+        // 시총 값
+        g.select("text.value-mc")
+          .transition().duration(1000)
+          .style("opacity", 1)
+          .tween("text", function() {
+            const prev = previousDataMap.get(d.symbol);
+            const start = prev ? (prev.market_cap_usd || 0) : 0;
+            const interp = d3.interpolateNumber(start, mc);
+            return function(t) { this.textContent = `$${formatCompact(interp(t))}`; };
+          })
+          .attr("x", barStartX + Math.max(10, mcW + 10))
+          .attr("text-anchor", "start");
+
+        // 라벨: "1. Bitcoin (BTC)" 형식
         g.select("text.label")
-          .text(` ${d.symbol} — ${d.name}`);
-
-        g.select("rect.bar-cap")
+          .text(`${d.rank}. ${d.name} (${d.symbol})`)
           .transition().duration(800)
-          .attr("width", capW)
-          .attr("fill", colorOf(d));
+          .style("opacity", 1);
 
-        g.select("text.value-cap")
-          .text(`$${numCompact(capVal)}`)
+        // 거래대금 막대
+        g.select("rect.bar-turn")
+          .transition().duration(1000)
+          .attr("width", turnW);
+
+        // 거래대금 라벨
+        g.select("text.value-turn")
+          .text(`${formatCompact(turn)} USDT`)
           .transition().duration(800)
-          .attr("x", capBarStart + Math.max(10, capW + 10))
+          .style("opacity", 1)
+          .attr("x", barStartX + Math.max(10, turnW + 10))
           .attr("text-anchor", "start");
 
-        g.select("rect.bar-vol")
-          .transition().duration(800)
-          .attr("width", volW);
-
-        g.select("text.value-vol")
-          .text(`${numCompact(volVal)} USDT`)
-          .transition().duration(800)
-          .attr("x", capBarStart + Math.max(10, volW + 10))
-          .attr("text-anchor", "start");
+        // NEW 표시(심플)
+        const prev = previousDataMap.get(d.symbol);
+        const rankText = g.select("text.rank-change");
+        if (!prev) {
+          rankText.text("NEW").attr("fill", "white");
+        } else {
+          rankText.text(" ").attr("fill", "#aaa");
+        }
+        rankText.transition().duration(800).style("opacity", 1);
       });
 
-      rows.exit().remove();
+      // 퇴장
+      group.exit().remove();
 
-      // 랭크 추적(선택)
+      // 랭크 기록
       previousDataMap.clear();
-      data.forEach((d, i) => previousDataMap.set(d.symbol, { ...d, rank: i+1 }));
+      data.forEach(d => previousDataMap.set(d.symbol, { market_cap_usd: d.market_cap_usd }));
     }
 
     updateChart();
-    setInterval(updateChart, 5 * 60 * 1000); // 5분
+    setInterval(updateChart, 300 * 1000); // 5분
     startCountdown();
   </script>
 </body>
